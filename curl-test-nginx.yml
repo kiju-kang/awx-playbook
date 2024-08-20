@@ -1,5 +1,5 @@
-- hosts: local
+- hosts: all
   
   tasks:
   - name: Check that you can connect (GET) to a page and it returns a status 200
-    local_action: uri url=http://aaa.test.com/test
+    local_action: uri url=https://google.com
