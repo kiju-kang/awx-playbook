@@ -2,6 +2,4 @@
   
   tasks:
   - name: Check that you can connect (GET) to a page and it returns a status 200
-    uri:
-      url: http://aaa.test.com/test
-    delegate_to: localhost
+    local_action: uri url=http://aaa.test.com/test
