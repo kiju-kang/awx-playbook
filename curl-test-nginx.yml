@@ -1,4 +1,5 @@
 - hosts: all
+  gather_facts: no
   
   tasks:
   - name: Check that you can connect (GET) to a page and it returns a status 200
