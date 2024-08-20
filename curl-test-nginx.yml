@@ -24,4 +24,4 @@
     register: rs
 
   - debug:
-      var: rs
+      var: rs.stdout
