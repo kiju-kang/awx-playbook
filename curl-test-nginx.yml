@@ -17,6 +17,10 @@
           filename: fake.txt
           mime_type: text/plain
         text_form_field: value
+
+  - name: run this command and ignore the result
+    shell: /usr/bin/pwd || /bin/true
+
     register: rs
 
   - debug:
