@@ -4,6 +4,7 @@
   
   tasks:
   - name: Check that you can connect (GET) to a page and it returns a status 200
+    ansible.builtin.uri:
     url: https://httpbin.org/post
     method: POST
     body_format: form-multipart
