@@ -2,4 +2,4 @@
   
   tasks:
   - name: Check that you can connect (GET) to a page and it returns a status 200
-    local_action: curl https://google.com
+    local_action: url url:https://google.com
