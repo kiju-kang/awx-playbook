@@ -1,4 +1,4 @@
-- hosts: {{ hosts }}
+- hosts: '{{ host }}'
   gather_facts: no
   connection: local
   
