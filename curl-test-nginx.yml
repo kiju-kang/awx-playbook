@@ -1,4 +1,4 @@
-- hosts: "{{ hosts }}"
+- hosts: gather_inv
   gather_facts: no
   
   tasks:
