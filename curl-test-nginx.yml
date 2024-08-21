@@ -1,4 +1,4 @@
-- hosts: "{{ variable_host | default('empty_group') }}"
+- hosts: "{{ hosts }}"
   gather_facts: no
   
   tasks:
