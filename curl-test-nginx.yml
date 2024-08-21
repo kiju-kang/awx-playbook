@@ -1,6 +1,5 @@
 - hosts: '{{ host }}'
   gather_facts: no
-  connection: local
   
   tasks:
   - name: Check that you can connect (GET) to a page and it returns a status 200
