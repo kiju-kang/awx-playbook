@@ -7,4 +7,4 @@
     register: pkill_rs
 
   - debug:
-      var: pkill_rs.stdout_lines
+      var: pkill_rs
