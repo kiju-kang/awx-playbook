@@ -1,0 +1,115 @@
+# =================================================================================
+# etcd 인증서 배포 및 서비스 활성화
+# =================================================================================
+# etcd 인증서를 저장할 PKI 디렉토리들이 존재하는지 확인하고 없으면 생성.
+# kubeadm이 참조하는 표준 경로(/etc/kubernetes/pki/etcd)도 함께 생성.
+---
+- name: Ensure etcd PKI directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ etcd_cert_dir }}"
+    - "{{ etcd_cert_dir }}/etcd"
+    - /etc/kubernetes/pki/etcd
+
+# 컨트롤러 노드에서 압축한 인증서 아카이브 파일(/tmp/etcd_certs_all.tgz)을 대상 노드로 복사.
+- name: Push the certificate archive to the node
+  ansible.builtin.copy:
+    src: /tmp/etcd_certs_all.tgz
+    dest: /tmp/etcd_certs_all.tgz
+    mode: "0600"
+
+# API 서버가 etcd와 통신할 때 사용하는 클라이언트 인증서의 압축을 해제하여 배치.
+# remote_src: yes: 대상 노드에 있는 압축 파일을 사용.
+# include: 압축 파일 내에서 특정 파일만 선택적으로 해제.
+- name: Extract apiserver-etcd-client certs to the main PKI directory
+  ansible.builtin.unarchive:
+    src: /tmp/etcd_certs_all.tgz
+    dest: "{{ etcd_cert_dir }}/"
+    remote_src: yes
+    include:
+      - "apiserver-etcd-client.crt"
+      - "apiserver-etcd-client.key"
+    owner: root
+    group: root
+    mode: "0644"
+
+# 모든 노드에서 공통으로 사용하는 CA 인증서와 헬스체크 클라이언트 인증서의 압축을 해제하여 배치.
+- name: Extract common etcd certs (ca, healthcheck) to the 'etcd' subdirectory
+  ansible.builtin.unarchive:
+    src: /tmp/etcd_certs_all.tgz
+    dest: "{{ etcd_cert_dir }}/etcd/"
+    remote_src: yes
+    include:
+      - "ca.crt"
+      - "ca.key"
+      - "healthcheck-client.crt"
+      - "healthcheck-client.key"
+    owner: root
+    group: root
+    mode: "0600"
+
+# 각 노드에 해당하는 서버/피어 인증서의 압축을 해제하여 배치.
+# include: '{{ inventory_hostname }}/...' 구문을 사용하여 현재 작업 중인 노드의 인증서만 선택.
+# extra_opts: --strip-components=1 옵션으로 압축 해제 시 상위 디렉토리(예: 'node1/')를 제거하고 파일만 가져옴.
+- name: Extract node-specific etcd certs (server, peer) to the 'etcd' subdirectory
+  ansible.builtin.unarchive:
+    src: /tmp/etcd_certs_all.tgz
+    dest: "{{ etcd_cert_dir }}/etcd/"
+    remote_src: yes
+    include:
+      - "{{ inventory_hostname }}/server.crt"
+      - "{{ inventory_hostname }}/server.key"
+      - "{{ inventory_hostname }}/peer.crt"
+      - "{{ inventory_hostname }}/peer.key"
+    extra_opts: ["--strip-components=1"]
+    owner: root
+    group: root
+    mode: "0600"
+
+# kubeadm과의 호환성을 위해 필요한 인증서들을 /etc/kubernetes/pki/ 디렉토리 구조에 맞게 복사.
+- name: Copy required certs to /etc/kubernetes/pki/etcd for kubeadm
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    remote_src: yes
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: '{{ etcd_cert_dir }}/etcd/ca.crt', dest: '/etc/kubernetes/pki/etcd/ca.crt', mode: '0644' }
+    - { src: '{{ etcd_cert_dir }}/etcd/ca.key', dest: '/etc/kubernetes/pki/etcd/ca.key', mode: '0600' }
+    - { src: '{{ etcd_cert_dir }}/apiserver-etcd-client.crt', dest: '/etc/kubernetes/pki/apiserver-etcd-client.crt', mode: '0644' }
+    - { src: '{{ etcd_cert_dir }}/apiserver-etcd-client.key', dest: '/etc/kubernetes/pki/apiserver-etcd-client.key', mode: '0600' }
+
+# 보안을 위해 모든 개인 키 파일의 권한을 '600'(소유자만 읽기/쓰기 가능)으로 설정.
+- name: Set strict permissions on all private key files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    mode: "0600"
+  loop:
+    - "{{ etcd_cert_dir }}/apiserver-etcd-client.key"
+    - "{{ etcd_cert_dir }}/etcd/ca.key"
+    - "{{ etcd_cert_dir }}/etcd/healthcheck-client.key"
+    - "{{ etcd_cert_dir }}/etcd/server.key"
+    - "{{ etcd_cert_dir }}/etcd/peer.key"
+
+# 템플릿을 사용하여 etcd systemd 서비스 파일을 생성.
+# 파일 내용이 변경되면 'restart etcd' 핸들러를 호출하여 서비스를 재시작.
+- name: Deploy etcd systemd service file and start service
+  ansible.builtin.template:
+    src: etcd.service.j2
+    dest: /etc/systemd/system/etcd.service
+  notify: restart etcd
+
+# etcd 서비스가 항상 실행되고 부팅 시 자동으로 시작되도록 설정.
+- name: Ensure etcd service is running and enabled
+  ansible.builtin.systemd:
+    name: etcd
+    state: started
+    enabled: yes
+    daemon_reload: yes

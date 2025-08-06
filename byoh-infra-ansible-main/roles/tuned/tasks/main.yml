@@ -1,0 +1,86 @@
+# =================================================================
+# Kubernetes IPVS 모드 활성화
+# =================================================================
+- name: IPVS | Install IPVS utilities
+  apt:
+    name:
+      - ipset
+      - ipvsadm
+    state: present
+    update_cache: yes
+  tags:
+    - ipvs
+
+- name: IPVS | Create IPVS kernel modules configuration file for boot-time loading
+  copy:
+    dest: /etc/modules-load.d/ipvs.conf
+    content: |
+      # Load IPVS modules on boot for Kubernetes
+      {{ ipvs_modules | join('\n') }}
+    mode: '0644'
+  tags:
+    - ipvs
+
+- name: IPVS | Load IPVS kernel modules into the running kernel
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ ipvs_modules }}"
+  tags:
+    - ipvs
+
+# =================================================================
+# Tuned 프로파일 설치 및 활성화
+# =================================================================
+- name: Tuned | Install tuned package
+  apt:
+    name: tuned
+    state: present
+    update_cache: yes
+  tags:
+    - tuned
+
+- name: Tuned | Ensure tuned service is enabled and started
+  systemd:
+    name: tuned
+    enabled: yes
+    state: started
+  tags:
+    - tuned
+
+- name: Tuned | Create profile directory
+  file:
+    path: "/etc/tuned/{{ profile_name }}"
+    state: directory
+    mode: "0755"
+  tags:
+    - tuned
+
+- name: Tuned | Deploy tuned.conf
+  template:
+    src: tuned.conf.j2
+    dest: "/etc/tuned/{{ profile_name }}/tuned.conf"
+    mode: "0644"
+  notify: Restart tuned
+  tags:
+    - tuned
+
+- name: Tuned | Activate custom profile
+  command: "tuned-adm profile {{ profile_name }}"
+  register: tuned_result
+  changed_when: "'successfully switched' in tuned_result.stdout"
+  tags:
+    - tuned
+
+- name: Tuned | Verify active profile
+  command: tuned-adm active
+  register: tuned_active
+  changed_when: false
+  tags:
+    - tuned
+
+- name: Tuned | Show active profile
+  debug:
+    msg: "{{ tuned_active.stdout }}"
+  tags:
+    - tuned

@@ -1,0 +1,30 @@
+# =================================================================================
+# etcd 바이너리 설치 및 데이터 디렉토리 생성
+# =================================================================================
+# 지정된 버전의 etcd 릴리스 압축 파일을 GitHub에서 다운로드.
+# get_url 모듈은 URL에서 파일을 다운로드하여 지정된 경로(dest)에 저장.
+---
+- name: Download etcd v{{ etcd_version }}
+  ansible.builtin.get_url:
+    url: "https://github.com/etcd-io/etcd/releases/download/v{{ etcd_version }}/etcd-v{{ etcd_version }}-linux-amd64.tar.gz"
+    dest: "/tmp/etcd-v{{ etcd_version }}-linux-amd64.tar.gz"
+
+# 다운로드한 압축 파일에서 etcd와 etcdctl 바이너리만 추출하여 /usr/local/bin 디렉토리에 배치.
+# extra_opts: ["--strip-components=1"] - 압축 해제 시 상위 디렉토리(예: etcd-vX.Y.Z-linux-amd64/)를 제거하고 내용물만 가져옴.
+# creates: "/usr/local/bin/etcd" - 해당 파일이 이미 존재하면 이 작업을 건너뛰어 멱등성을 보장.
+- name: Unpack etcd binaries to /usr/local/bin
+  ansible.builtin.unarchive:
+    src: "/tmp/etcd-v{{ etcd_version }}-linux-amd64.tar.gz"
+    dest: /usr/local/bin
+    remote_src: true
+    mode: "0755"
+    extra_opts: ["--strip-components=1"]
+    include: ["etcd-v{{ etcd_version }}-linux-amd64/etcd", "etcd-v{{ etcd_version }}-linux-amd64/etcdctl"]
+    creates: "/usr/local/bin/etcd"
+
+# etcd가 데이터를 저장할 디렉토리를 생성.
+- name: Create etcd data directory
+  ansible.builtin.file:
+    path: "{{ etcd_data_dir }}"
+    state: directory
+    mode: '0700'

@@ -1,0 +1,105 @@
+# =================================================================================
+# 기본 시스템 패키지 및 설정 (Base System Packages & Configuration)
+# =================================================================================
+# 패키지 목록을 업데이트하여 최신 정보를 가져옴.
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+
+# 쿠버네티스 및 컨테이너 런타임 설치에 필요한 기본 패키지들을 설치.
+- name: Install base packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - apt-transport-https
+    state: present
+
+# kubelet이 정상적으로 작동하기 위해 스왑(swap)을 비활성화.
+- name: Disable swap
+  ansible.builtin.shell: |
+    swapoff -a
+    sed -i '/ swap /d' /etc/fstab
+  when: (ansible_facts['swaptotal_mb'] | default(0) | int) > 0
+
+# =================================================================================
+# 커널 모듈 및 파라미터 설정 (Kernel Module & Parameter Configuration)
+# =================================================================================
+# containerd가 필요로 하는 커널 모듈(overlay, br_netfilter)이 부팅 시 자동으로 로드되도록 설정 파일을 생성.
+- name: Kernel modules list
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/containerd.conf
+    content: |
+      overlay
+      br_netfilter
+
+# 위에서 지정한 커널 모듈들을 현재 세션에 로드.
+- name: Load modules
+  ansible.builtin.modprobe:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - overlay
+    - br_netfilter
+
+# 쿠버네티스 네트워킹에 필요한 sysctl 커널 파라미터를 템플릿을 통해 설정.
+- name: Sysctl template
+  ansible.builtin.template:
+    src: kubernetes-cri.conf.j2
+    dest: /etc/sysctl.d/99-kubernetes-cri.conf
+  notify: reload sysctl
+
+# =================================================================================
+# 컨테이너 런타임 및 쿠버네티스 패키지 설치 (Container Runtime & K8s Package Installation)
+# =================================================================================
+# 별도의 작업 파일(containerd_install.yml)을 포함하여 containerd 런타임을 설치.
+- name: Install containerd runtime
+  ansible.builtin.include_tasks: containerd_install.yml
+
+# 쿠버네티스 공식 APT 저장소의 GPG 키를 다운로드하여 신뢰할 수 있는 키로 등록.
+- name: Add K8s GPG key
+  ansible.builtin.get_url:
+    url: "https://pkgs.k8s.io/core:/stable:/{{ apt_key_k8s }}/deb/Release.key"
+    dest: /usr/share/keyrings/kubernetes-apt-keyring.asc
+    mode: '0644'
+
+# 쿠버네티스 패키지를 다운로드할 공식 APT 저장소를 시스템에 추가.
+- name: Add K8s APT repository
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/usr/share/keyrings/kubernetes-apt-keyring.asc] https://pkgs.k8s.io/core:/stable:/{{ apt_key_k8s }}/deb/ /"
+    state: present
+  notify: apt update
+
+# 지정된 버전의 쿠버네티스 핵심 패키지(kubelet, kubeadm, kubectl)를 설치.
+- name: Install k8s packages
+  ansible.builtin.apt:
+    name:
+      - "kubelet={{ apt_k8s_version }}"
+      - "kubeadm={{ apt_k8s_version }}"
+      - "kubectl={{ apt_k8s_version }}"
+    state: present
+    update_cache: yes
+
+# kubelet이 사용할 노드의 IP 주소를 명시적으로 지정하는 설정.
+# 멀티-NIC 환경 등에서 특정 IP를 사용해야 할 때 주석을 해제하여 사용.
+#- name: Configure kubelet to use the correct node IP
+#  ansible.builtin.lineinfile:
+#    path: /etc/default/kubelet
+#    regexp: '^KUBELET_EXTRA_ARGS='
+#    line: 'KUBELET_EXTRA_ARGS=--node-ip={{ ansible_host }}'
+#    create: yes
+#    owner: root
+#    group: root
+#    mode: '0644'
+#  notify: restart kubelet
+
+# =================================================================================
+# 핸들러 즉시 실행 (Flush Handlers)
+# =================================================================================
+# 이 시점까지 notify된 모든 핸들러(reload sysctl, apt update 등)를 강제로 즉시 실행.
+# 이는 후속 작업(예: kubeadm init)이 진행되기 전에 모든 변경 사항이 시스템에 적용 보장.
+- name: Flush all handlers to apply changes before proceeding
+  ansible.builtin.meta: flush_handlers

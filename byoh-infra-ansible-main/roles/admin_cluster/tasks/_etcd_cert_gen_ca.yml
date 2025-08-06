@@ -1,0 +1,17 @@
+# =================================================================================
+# etcd 클러스터용 CA 인증서 생성 (Self-Signed)
+# =================================================================================
+# OpenSSL 쉘 명령을 사용하여 etcd CA의 개인 키(ca.key)와 자체 서명 인증서(ca.crt)를 생성.
+# 이 CA는 etcd 클러스터 내의 노드 간 통신을 암호화하는 데 사용될 인증서들을 발급하는 루트 역할을 함.
+# args.chdir: OpenSSL 명령을 지정된 임시 디렉토리에서 실행.
+# args.creates: ca.crt 파일이 이미 존재하면 이 작업을 건너뛰어 멱등성을 보장.
+---
+- name: Generate CA private key and certificate using shell
+  ansible.builtin.shell: |
+    openssl genrsa -out ca.key 4096
+    openssl req -x509 -new -nodes -key ca.key \
+      -subj "/CN=etcd-ca" -days {{ etcd_cert_days }} \
+      -out ca.crt
+  args:
+    chdir: "{{ etcd_cert_tmp_dir }}"
+    creates: "{{ etcd_cert_tmp_dir }}/ca.crt"

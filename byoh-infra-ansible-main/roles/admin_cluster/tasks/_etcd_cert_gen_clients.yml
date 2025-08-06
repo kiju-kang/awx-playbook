@@ -1,0 +1,27 @@
+# =================================================================================
+# etcd 클라이언트 인증서 생성
+# =================================================================================
+# 루프를 돌며 etcd와 통신하는 클라이언트들(API 서버, 헬스체크)의 인증서를 생성.
+# 1. genrsa: 클라이언트 개인 키 생성
+# 2. req: 개인 키를 사용하여 인증서 서명 요청(CSR) 파일 생성
+# 3. x509: 앞서 만든 CA(ca.crt, ca.key)를 이용해 CSR에 서명하여 최종 클라이언트 인증서 발급
+# 4. rm: 중간 과정에서 생성된 CSR 파일 삭제
+# loop: 리스트에 정의된 클라이언트들을 순회하며 각각 인증서 생성 작업을 반복.
+# loop_control.label: Ansible 실행 로그에 각 아이템의 이름이 표시되도록 하여 가독성을 높임.
+---
+- name: Generate client certificate keys and certs using shell
+  ansible.builtin.shell: |
+    openssl genrsa -out {{ item.name }}.key 4096
+    openssl req -new -key {{ item.name }}.key \
+      -subj "/CN={{ item.cn }}" -out {{ item.name }}.csr
+    openssl x509 -req -in {{ item.name }}.csr -CA ca.crt -CAkey ca.key \
+      -CAcreateserial -out {{ item.name }}.crt -days {{ etcd_cert_days }} -sha256
+    rm {{ item.name }}.csr
+  args:
+    chdir: "{{ etcd_cert_tmp_dir }}"
+    creates: "{{ etcd_cert_tmp_dir }}/{{ item.name }}.crt"
+  loop:
+    - { name: 'apiserver-etcd-client', cn: 'kube-apiserver-etcd-client' }
+    - { name: 'healthcheck-client', cn: 'kube-etcd-healthcheck-client' }
+  loop_control:
+    label: "{{ item.name }}"

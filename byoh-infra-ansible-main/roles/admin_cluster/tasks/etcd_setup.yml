@@ -1,0 +1,85 @@
+# =================================================================================
+# 제어 노드 정의 및 인증서 중앙 생성 (Define Control Node & Centralized Cert Gen)
+# =================================================================================
+# admin_control_planes 그룹의 첫 번째 노드를 'first_cp_node'라는 fact로 정의.
+# 이 노드는 모든 etcd 인증서를 중앙에서 생성하는 역할을 담당.
+---
+- name: Define the first control plane node as a fact
+  ansible.builtin.set_fact:
+    first_cp_node: "{{ groups['admin_control_planes'][0] }}"
+  run_once: true
+
+# 모든 etcd 인증서 생성 작업을 첫 번째 컨트롤 플레인 노드에서만 실행.
+# delegate_to: "{{ first_cp_node }}" - 블록 내의 모든 작업을 해당 노드에서 실행하도록 위임.
+# run_once: true - 여러 호스트에 대해 플레이가 실행되더라도 이 블록은 단 한 번만 실행.
+- name: Generate all etcd certificates on the first control plane
+  delegate_to: "{{ first_cp_node }}"
+  run_once: true
+  block:
+    # 인증서 생성을 위한 임시 디렉토리를 생성.
+    - name: Ensure temporary cert directory exists
+      ansible.builtin.file:
+        path: "{{ etcd_cert_tmp_dir }}"
+        state: directory
+        mode: "0700"
+    # include_tasks를 사용하여 CA 인증서 생성 작업을 별도 파일에서 가져와 실행.
+    - name: Generate CA private key and certificate
+      ansible.builtin.include_tasks: _etcd_cert_gen_ca.yml
+    # 클라이언트(API 서버, 헬스체크)용 인증서를 생성하는 작업을 가져와 실행.
+    - name: Generate client certificates
+      ansible.builtin.include_tasks: _etcd_cert_gen_clients.yml
+    # 루프를 돌며 모든 컨트롤 플레인 노드를 위한 서버/피어 인증서를 생성.
+    - name: Generate server/peer certificates for each control plane node
+      ansible.builtin.include_tasks: _etcd_cert_gen_node.yml
+      loop: "{{ groups['admin_control_planes'] }}"
+      loop_control:
+        loop_var: target_cp
+    # 중앙에서 생성된 모든 인증서 파일들을 하나의 tgz 아카이브 파일로 압축.
+    # 다른 노드에 인증서를 쉽게 배포하기 위함.
+    - name: Archive all generated certificates into a tgz file
+      ansible.builtin.archive:
+        path: "{{ etcd_cert_tmp_dir }}/*"
+        dest: "/tmp/etcd_certs_all.tgz"
+        format: gz
+
+# =================================================================================
+# 인증서 배포 및 etcd 서비스 구성 (Distribute Certs & Configure etcd)
+# =================================================================================
+# 첫 번째 컨트롤 플레인 노드에서 생성된 인증서 아카이브를 AWX 컨트롤러(Ansible 실행 위치)로 가져옴.
+- name: Fetch the certificate archive to the AWX controller
+  run_once: true
+  ansible.builtin.fetch:
+    src: /tmp/etcd_certs_all.tgz
+    dest: /tmp/etcd_certs_all.tgz
+    flat: true
+    delegate_to: "{{ first_cp_node }}"
+
+# 모든 대상 노드에 etcd 바이너리를 설치하는 작업을 포함.
+- name: Install etcd binaries
+  ansible.builtin.include_tasks: _etcd_install_binaries.yml
+
+# 모든 대상 노드에 인증서를 배포하고 etcd 서비스를 구성하는 작업 진행.
+- name: Distribute certificates and configure etcd service
+  ansible.builtin.include_tasks: _etcd_distribute_certs.yml
+
+# =================================================================================
+# 임시 파일 정리 (Cleanup Temporary Files)
+# =================================================================================
+# 첫 번째 컨트롤 플레인 노드에 남은 임시 파일과 디렉토리를 정리.
+- name: Clean up temporary files on the first control plane
+  delegate_to: "{{ first_cp_node }}"
+  run_once: true
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /tmp/etcd_certs_all.tgz
+    - "{{ etcd_cert_tmp_dir }}"
+
+# AWX 컨트롤러(localhost)에 남은 임시 인증서 아카이브 파일을 정리.
+- name: Clean up temporary file on the AWX controller
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.file:
+    path: /tmp/etcd_certs_all.tgz
+    state: absent

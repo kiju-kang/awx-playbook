@@ -1,0 +1,10 @@
+[main]
+include={{ parent_profile }}
+
+[vm]
+transparent_hugepages=never
+
+[sysctl]
+{% for key, value in tuned_sysctl.items() %}
+{{ key }}={{ value }}
+{% endfor %}

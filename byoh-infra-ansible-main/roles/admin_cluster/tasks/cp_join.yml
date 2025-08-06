@@ -1,0 +1,57 @@
+# =================================================================================
+# 추가 컨트롤 플레인 노드 참여 (Join Additional Control Plane Nodes)
+# =================================================================================
+# kubeadm을 실행하기 전에 컨테이너 런타임인 containerd가 활성화되어 있는지 확인.
+---
+- name: Pre-flight check | Ensure containerd is active
+  ansible.builtin.systemd:
+    name: containerd
+    state: started
+    enabled: yes
+
+# 커널 파라미터 net.ipv4.ip_forward가 1로 설정되어 있는지 확인하고, 아니면 설정.
+- name: Pre-flight check | Ensure ip_forward is set to 1
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    reload: yes
+
+# 클러스터 인증서(PKI)를 저장할 /etc/kubernetes/pki 디렉토리가 존재하는지 확인하고 없으면 생성.
+- name: Ensure PKI directory exists on this control plane
+  ansible.builtin.file:
+    path: /etc/kubernetes/pki
+    state: directory
+    mode: '0755'
+
+# 첫 번째 마스터 노드에서 수집하여 메모리에 저장해 둔 PKI 파일들을 현재 노드에 생성.
+# content: 'k8s_join_info' 임시 호스트에 저장된 파일 내용을 b64decode 필터로 디코딩하여 사용.
+# dest: 각 파일을 /etc/kubernetes/pki 디렉토리 아래에 올바른 이름으로 저장.
+# loop: 필요한 파일 목록과 각 파일에 맞는 권한(mode)을 지정하여 반복 작업을 수행.
+- name: Write required PKI files from in-memory inventory
+  ansible.builtin.copy:
+    content: "{{ hostvars['k8s_join_info']['pki_files'][item.file] | b64decode }}"
+    dest: "/etc/kubernetes/pki/{{ item.file }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { file: 'ca.crt', mode: '0644' }
+    - { file: 'ca.key', mode: '0600' }
+    - { file: 'sa.key', mode: '0600' }
+    - { file: 'sa.pub', mode: '0644' }
+    - { file: 'front-proxy-ca.crt', mode: '0644' }
+    - { file: 'front-proxy-ca.key', mode: '0600' }
+  loop_control:
+    label: "{{ item.file }}"
+
+# kubeadm join 명령을 실행하여 현재 노드를 기존 클러스터에 컨트롤 플레인 멤버로 참여시킴.
+# --token, --discovery-token-ca-cert-hash: 첫 번째 마스터에서 수집한 정보를 사용.
+# --control-plane: 이 노드가 워커가 아닌 컨트롤 플레인으로 참여함을 명시.
+- name: Join other control plane nodes to the cluster
+  ansible.builtin.shell:
+    cmd: >
+      kubeadm join {{ controlplane_endpoint }}
+      --token {{ hostvars['k8s_join_info']['kubeadm_token'] }}
+      --discovery-token-ca-cert-hash sha256:{{ hostvars['k8s_join_info']['discovery_token_ca_cert_hash'] }}
+      --control-plane
+  args:
+    creates: /etc/kubernetes/kubelet.conf

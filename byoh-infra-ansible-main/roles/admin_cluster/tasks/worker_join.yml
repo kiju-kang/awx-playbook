@@ -1,0 +1,36 @@
+# =================================================================================
+# 워커 노드 클러스터 참여 (Join Worker Nodes)
+# =================================================================================
+# 워커 노드로 참여하기 전, 컨테이너 런타임인 containerd가 활성화되어 있는지 확인.
+---
+- name: Pre-flight check | Ensure containerd is active
+  ansible.builtin.systemd:
+    name: containerd
+    state: started
+    enabled: yes
+
+# 커널 파라미터 net.ipv4.ip_forward가 1로 설정되어 있는지 확인하고, 아니면 설정.
+- name: Pre-flight check | Ensure ip_forward is set to 1
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    reload: yes
+
+# 첫 번째 마스터 노드에서 수집하여 메모리에 저장된 참여 토큰과 해시 값을 출력.
+- name: Debug loaded join variables for worker
+  ansible.builtin.debug:
+    msg:
+      - "Kubeadm Token: --{{ hostvars['k8s_join_info']['kubeadm_token'] }}--"
+      - "Discovery Hash: --{{ hostvars['k8s_join_info']['discovery_token_ca_cert_hash'] }}--"
+
+# kubeadm join 명령을 실행하여 현재 워커 노드를 클러스터에 참여.
+# controlplane_endpoint: 참여할 마스터 노드의 주소.
+# token, discovery-token-ca-cert-hash: 첫 번째 마스터 노드에서 생성하고 'k8s_join_info'라는 임시 호스트에 저장했던 정보를 사용.
+- name: Join worker node to the cluster
+  ansible.builtin.command: >
+    kubeadm join {{ controlplane_endpoint }}
+    --token {{ hostvars['k8s_join_info']['kubeadm_token'] }}
+    --discovery-token-ca-cert-hash sha256:{{ hostvars['k8s_join_info']['discovery_token_ca_cert_hash'] }}
+  args:
+    creates: /etc/kubernetes/kubelet.conf

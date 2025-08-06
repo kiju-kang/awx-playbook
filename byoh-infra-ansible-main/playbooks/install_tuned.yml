@@ -1,0 +1,6 @@
+---
+- name: Install and activate custom tuned profile
+  hosts: tuned_node_new
+  become: true
+  roles:
+    - tuned

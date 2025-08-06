@@ -1,0 +1,18 @@
+[Unit]
+Description=BYOH Agent
+After=network.target
+
+[Service]
+Type=simple
+Environment="NS_ARGS=--namespace {{ mgmt_namespace }}"
+Environment="METRIC_ARGS=--metricsbindaddress :10001"
+Environment="LABEL_ARGS=--label environment={{ infra }} --label role={{ role_name }} --label hostname={{ ansible_facts.hostname }}"
+Environment="MGMT_ARGS=--bootstrap-kubeconfig {{ kubeconfig_path }}"
+Environment="INSTALL_ARGS=--skip-installation true"
+ExecStart={{ byoh_agent_path }} $NS_ARGS $LABEL_ARGS $MGMT_ARGS $INSTALL_ARGS $METRIC_ARGS
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

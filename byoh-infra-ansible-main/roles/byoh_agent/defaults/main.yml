@@ -1,0 +1,9 @@
+# 파일·경로
+local_admin_file: "/etc/kubernetes/admin.conf"
+kubeconfig_path: "{{ target_dir }}/{{ target_file }}"
+systemd_path: "/etc/systemd/system"
+
+# 퍼미션
+file_owner: "root"
+file_group: "root"
+

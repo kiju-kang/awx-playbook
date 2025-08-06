@@ -1,0 +1,94 @@
+########################  INIT CONFIG  ########################
+apiVersion: {{ kubeadm_api_version }}
+kind: InitConfiguration
+nodeRegistration:
+  criSocket: unix:///var/run/containerd/containerd.sock
+  imagePullPolicy: IfNotPresent
+  name: {{ inventory_hostname }}
+  taints: []
+  kubeletExtraArgs:
+    - name: "node-ip"
+      value: "{{ ansible_host }}"
+################################################################
+---
+####################  CLUSTER CONFIG  ##########################
+apiVersion: {{ kubeadm_api_version }}
+kind: ClusterConfiguration
+kubernetesVersion: v{{ kubernetes_version }}
+controlPlaneEndpoint: "{{ controlplane_endpoint }}"
+networking:
+  podSubnet: "{{ pod_subnet }}"
+  serviceSubnet: "{{ service_subnet }}"
+
+apiServer:
+  certSANs:
+    - "localhost"
+    - "127.0.0.1"
+    - "{{ controlplane_endpoint.split(':')[0] }}"
+{% for host in groups['admin_control_planes'] %}
+    - "{{ hostvars[host]['ansible_host'] }}"
+    - "{{ host }}"
+{% endfor %}
+  extraArgs:
+{% for k, v in api_server_args.items() %}
+    - name: "{{ k }}"
+      value: "{{ v }}"
+{% endfor %}
+
+controllerManager:
+  extraArgs:
+{% for k, v in controller_args.items() %}
+    - name: "{{ k }}"
+      value: "{{ v }}"
+{% endfor %}
+
+scheduler:
+  extraArgs:
+{% for k, v in scheduler_args.items() %}
+    - name: "{{ k }}"
+      value: "{{ v }}"
+{% endfor %}
+
+etcd:
+  external:
+    endpoints:
+{% for h in groups['admin_control_planes'] %}
+      - https://{{ hostvars[h]['ansible_host'] }}:2379
+{% endfor %}
+    caFile:   "/etc/kubernetes/pki/etcd/ca.crt"
+    certFile: "/etc/kubernetes/pki/apiserver-etcd-client.crt"
+    keyFile:  "/etc/kubernetes/pki/apiserver-etcd-client.key"
+
+imageRepository: "{{ image_repository }}"
+caCertificateValidityPeriod: 876000h0m0s
+certificateValidityPeriod: 876000h0m0s
+certificatesDir: /etc/kubernetes/pki
+################################################################
+---
+#################### KUBE-PROXY CONFIG ########################
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+mode: ipvs
+################################################################
+---
+####################  KUBELET CONFIG  ##########################
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+protectKernelDefaults: true
+failSwapOn: true
+evictionHard:
+  memory.available: "500Mi"
+  nodefs.available: "10%"
+  nodefs.inodesFree: "5%"
+  imagefs.available: "10%"
+tlsCipherSuites:
+  - "TLS_AES_256_GCM_SHA384"
+  - "TLS_CHACHA20_POLY1305_SHA256"
+  - "TLS_AES_128_GCM_SHA256"
+  - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+  - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+  - "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+  - "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256"
+readOnlyPort: 0
+streamingConnectionIdleTimeout: "4h"
+################################################################

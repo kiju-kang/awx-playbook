@@ -1,0 +1,55 @@
+# ---------- Package versions ----------
+apt_k8s_deb_suffix: "-1.1"
+apt_k8s_version: "{{ kubernetes_version ~ apt_k8s_deb_suffix }}"
+apt_key_k8s: "v{{ kubernetes_version.split('.')[0] }}.{{ kubernetes_version.split('.')[1] }}"
+containerd_arch: "{{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }}"
+
+# ---------- etcd ----------
+# etcd_version은 인벤토리의 [all:vars]에서 가져옵니다.
+etcd_data_dir: "/var/lib/external-etcd"
+etcd_cert_dir: "/etc/etcd/pki"
+etcd_cert_days: 36500
+etcd_cert_tmp_dir: /tmp/etcd_certs_ansible # 인증서 생성을 위한 임시 디렉터리
+
+# ---------- Kubernetes ----------
+kubeadm_api_version: "kubeadm.k8s.io/v1beta4"
+pod_subnet: "10.244.0.0/16"
+service_subnet: "10.96.0.0/12"
+image_repository: "registry.k8s.io"
+kubeadm_conf_path: "/root/kubeadm-config.yaml"
+cp_join_command_path: "/root/cluster-join-cp.sh"
+worker_join_command_path: "/root/cluster-join-worker.sh"
+pause_tag: "3.10"
+
+# ---------- clusterctl ----------
+clusterctl_version: "v1.9.5"
+byoh_image_path: "docker.io/yongiman/cluster-api-byoh-controller:v0.5.0"
+
+# ---------- API server / controller / scheduler ----------
+api_server_args:
+  authorization-mode: "Node,RBAC"
+#  enable-admission-plugins: "NodeRestriction,AlwaysPullImages,SecurityContextDeny,EventRateLimit"
+#  audit-log-path: "/var/log/kubernetes/audit.log"
+#  audit-log-maxage: "30"
+#  audit-log-maxbackup: "10"
+#  audit-log-maxsize: "100"
+  profiling: "false"
+#  service-account-lookup: "true"
+  service-account-key-file: "/etc/kubernetes/pki/sa.pub"
+#  tls-cipher-suites: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+  allow-privileged: "true"
+#  anonymous-auth: "false"
+  kubelet-certificate-authority: "/etc/kubernetes/pki/ca.crt"
+#  event-ttl: "1h"
+#  seccomp-default: "true"
+#  disable-admission-plugins: "ServiceAccount"
+
+controller_args:
+  bind-address: "127.0.0.1"
+  feature-gates: "RotateKubeletServerCertificate=true"
+  use-service-account-credentials: "true"
+  profiling: "false"
+
+scheduler_args:
+  bind-address: "127.0.0.1"
+  profiling: "false"

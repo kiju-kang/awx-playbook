@@ -1,0 +1,36 @@
+# =================================================================================
+# Cluster API 및 BYOH 프로바이더 초기화
+# =================================================================================
+# Kubernetes Cluster API를 관리하는 CLI 도구인 clusterctl을 다운로드.
+# force: no - 파일이 이미 존재하면 다시 다운로드하지 않음.
+---
+- name: Download clusterctl
+  ansible.builtin.get_url:
+    url: "https://github.com/kubernetes-sigs/cluster-api/releases/download/{{ clusterctl_version }}/clusterctl-linux-amd64"
+    dest: /usr/local/bin/clusterctl
+    mode: '0755'
+    force: no
+
+# clusterctl을 사용하여 클러스터에 Cluster API 컴포넌트를 설치하고 초기화.
+# changed_when: 실행 결과에 'Initializing' 문자열이 있을 때만 'changed' 상태로 인식.
+- name: clusterctl init
+  ansible.builtin.command: clusterctl init --infrastructure byoh
+  register: init_out
+  changed_when: "'Initializing' in init_out.stdout"
+
+# 'clusterctl init'에 의해 생성되는 byoh-system 네임스페이스가 완전히 준비될 때까지 대기.
+# kubectl get namespace 명령이 성공(rc == 0)할 때까지 최대 30번, 5초 간격으로 재시도.
+# 이는 후속 작업들이 해당 네임스페이스의 리소스를 참조하기 전에 네임스페이스가 존재하도록 보장.
+- name: Wait for BYOH namespace
+  ansible.builtin.command: kubectl get namespace byoh-system
+  retries: 30
+  delay: 5
+  register: ns_out
+  until: ns_out.rc == 0
+  changed_when: false
+
+# byoh-system 네임스페이스에 배포된 byoh-controller-manager의 컨테이너 이미지를 변경.
+# 기본 이미지 대신 사용자가 지정한 커스텀 이미지(예: 로컬에서 빌드한 이미지)를 사용하도록 'patch'.
+- name: Patch controller image
+  ansible.builtin.command: >
+    kubectl -n byoh-system set image deployment/byoh-controller-manager manager={{ byoh_image_path }}

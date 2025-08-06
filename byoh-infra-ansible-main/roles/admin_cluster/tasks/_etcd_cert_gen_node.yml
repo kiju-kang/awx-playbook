@@ -1,0 +1,62 @@
+# =================================================================================
+# etcd 노드별 서버/피어 인증서 생성
+# =================================================================================
+# 현재 작업 대상 노드(target_cp)의 인증서를 저장할 전용 디렉토리를 생성.
+---
+- name: Create a directory for the target node's certs
+  ansible.builtin.file:
+    path: "{{ etcd_cert_tmp_dir }}/{{ target_cp }}"
+    state: directory
+
+# 인증서의 SAN(Subject Alternative Name) 필드에 포함될 호스트와 IP 목록을 구성.
+# SAN은 인증서가 유효한 모든 도메인 이름과 IP 주소를 지정하여, 클라이언트가 서버를 정확하게 식별.
+- name: Build the list of Subject Alternative Names (SANs) for OpenSSL config
+  block:
+    # 기본 SAN 목록을 초기화합니다. localhost와 컨트롤 플레인 엔드포인트를 포함.
+    - name: Initialize base SANs list
+      ansible.builtin.set_fact:
+        etcd_sans:
+          - "DNS:localhost"
+          - "IP:127.0.0.1"
+          - "DNS:{{ controlplane_endpoint.split(':')[0] }}"
+          - "IP:{{ controlplane_endpoint.split(':')[0] }}"
+    # 'admin_control_planes' 그룹에 속한 모든 노드의 호스트 이름과 IP 주소를 SAN 목록에 추가.
+    - name: Add all control plane nodes to SANs list
+      ansible.builtin.set_fact:
+        etcd_sans: "{{ etcd_sans + ['DNS:' + item, 'IP:' + hostvars[item]['ansible_host']] }}"
+      loop: "{{ groups['admin_control_planes'] }}"
+  run_once: true
+
+# 위에서 구성한 SAN 목록을 사용하여 OpenSSL 설정 파일을 생성.
+# 이 설정 파일은 인증서 서명 시 확장 정보(v3_req)를 제공하는 데 사용.
+- name: Create OpenSSL config for signing node certificates
+  ansible.builtin.template:
+    src: openssl-signing.cnf.j2
+    dest: "{{ etcd_cert_tmp_dir }}/{{ target_cp }}/openssl-signing.cnf"
+
+# 루프를 돌며 노드의 서버(server) 인증서와 피어(peer) 인증서를 생성.
+# 서버 인증서는 클라이언트가 노드에 접속할 때, 피어 인증서는 노드 간 통신할 때 사용.
+# -extfile 및 -extensions: 바로 위에서 생성한 OpenSSL 설정 파일을 참조하여 SAN 정보를 인증서에 포함시킴.
+- name: Generate server and peer keys, CSRs, and certificates using shell
+  ansible.builtin.shell: |
+    # Generate private key
+    openssl genrsa -out {{ item }}.key 4096
+
+    # Generate CSR
+    openssl req -new -key {{ item }}.key \
+      -subj "/CN={{ target_cp }}-etcd-{{ item }}" -out {{ item }}.csr
+
+    # Sign certificate with CA and extensions from config file
+    openssl x509 -req -in {{ item }}.csr \
+      -CA "{{ etcd_cert_tmp_dir }}/ca.crt" \
+      -CAkey "{{ etcd_cert_tmp_dir }}/ca.key" \
+      -CAcreateserial \
+      -out {{ item }}.crt -days {{ etcd_cert_days }} -sha256 \
+      -extfile openssl-signing.cnf -extensions v3_req
+
+    # Clean up CSR
+    rm {{ item }}.csr
+  args:
+    chdir: "{{ etcd_cert_tmp_dir }}/{{ target_cp }}"
+    creates: "{{ etcd_cert_tmp_dir }}/{{ target_cp }}/{{ item }}.crt"
+  loop: ['server', 'peer']

@@ -1,0 +1,100 @@
+# =================================================================================
+# 모든 노드에 대한 OS 사전 설정 실행
+# =================================================================================
+# 컨트롤 플레인과 워커 노드를 포함한 모든 노드를 대상으로,
+# 쿠버네티스 설치에 필요한 공통 OS 설정(예: 패키지 설치, 스왑 비활성화, 커널 파라미터 설정 등)을 수행.
+# 'admin_cluster' 역할 내의 'os_preset.yml' 작업 파일을 포함하여 실행.
+---
+- name: 1. Run OS presets on all nodes
+  hosts: admin_control_planes,admin_workers
+  become: true
+  tasks:
+    - name: Include OS preset tasks
+      ansible.builtin.include_role:
+        name: admin_cluster
+        tasks_from: os_preset.yml
+
+# =================================================================================
+# 컨트롤 플레인 노드에 외부 ETCD 클러스터 설정
+# =================================================================================
+# 컨트롤 플레인 노드들을 대상으로 외부 etcd 클러스터를 구성.
+# 'admin_cluster' 역할 내의 'etcd_setup.yml' 작업 파일을 포함하여 실행.
+- name: 2. Setup External ETCD Cluster on Control Planes
+  hosts: admin_control_planes
+  become: true
+  tasks:
+    - name: Include etcd setup tasks
+      ansible.builtin.include_role:
+        name: admin_cluster
+        tasks_from: etcd_setup.yml
+
+# =================================================================================
+# 첫 번째 컨트롤 플레인 노드 초기화
+# =================================================================================
+# 컨트롤 플레인 그룹의 첫 번째 노드만을 대상으로 'kubeadm init'을 실행하여 클러스터를 부트스트랩.
+# 'admin_cluster' 역할 내의 'cp_init.yml' 작업 파일을 포함하여 실행.
+- name: 3. Initialize First Control Plane
+  hosts: "{{ groups['admin_control_planes'][0] }}"
+  become: true
+  tasks:
+    - name: Include control plane init tasks
+      ansible.builtin.include_role:
+        name: admin_cluster
+        tasks_from: cp_init.yml
+
+# =================================================================================
+# 나머지 컨트롤 플레인 노드 클러스터에 참여
+# =================================================================================
+# 첫 번째 노드를 제외한 나머지 컨트롤 플레인 노드들을 대상으로 'kubeadm join --control-plane'을 실행.
+# 'admin_cluster' 역할 내의 'cp_join.yml' 작업 파일을 포함하여 실행.
+- name: 4. Join Other Control Planes
+  hosts: "{{ groups['admin_control_planes'] | difference(groups['admin_control_planes'][0]) }}"
+  become: true
+  tasks:
+    - name: Include control plane join tasks
+      ansible.builtin.include_role:
+        name: admin_cluster
+        tasks_from: cp_join.yml
+
+# =================================================================================
+# Kube-OVN CNI 설치
+# =================================================================================
+# 첫 번째 컨트롤 플레인 노드에서 클러스터의 네트워크를 담당할 Kube-OVN CNI를 설치.
+# CNI 설치는 일반적으로 클러스터 전체에서 한 번만 수행.
+# 'admin_cluster' 역할 내의 'cni_install.yml' 작업 파일을 포함하여 실행.
+- name: 5. Install Kube-OVN CNI
+  hosts: "{{ groups['admin_control_planes'][0] }}"
+  become: true
+  tasks:
+    - name: Include CNI installation tasks
+      ansible.builtin.include_role:
+        name: admin_cluster
+        tasks_from: cni_install.yml
+
+# =================================================================================
+# 워커 노드 클러스터에 참여
+# =================================================================================
+# 모든 워커 노드를 대상으로 'kubeadm join'을 실행하여 클러스터에 참여.
+# 'admin_cluster' 역할 내의 'worker_join.yml' 작업 파일을 포함하여 실행.
+- name: 6. Join Worker Nodes
+  hosts: admin_workers
+  become: true
+  tasks:
+    - name: Include worker join tasks
+      ansible.builtin.include_role:
+        name: admin_cluster
+        tasks_from: worker_join.yml
+
+# =================================================================================
+# BYOH 프로바이더 설치
+# =================================================================================
+# 첫 번째 컨트롤 플레인 노드에서 BYOH(Bring Your Own Host) 프로바이더를 설치.
+# 'admin_cluster' 역할 내의 'byoh_provider.yml' 작업 파일을 포함하여 실행.
+- name: 7. Install BYOH Provider on the first control plane
+  hosts: "{{ groups['admin_control_planes'][0] }}"
+  become: true
+  tasks:
+    - name: Include BYOH provider tasks
+      ansible.builtin.include_role:
+        name: admin_cluster
+        tasks_from: byoh_provider.yml

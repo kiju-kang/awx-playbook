@@ -1,0 +1,7 @@
+---
+- name: Deploy BYOH Agent
+  hosts: byoh_node_new
+  become: true
+  gather_facts: true
+  roles:
+    - byoh_agent

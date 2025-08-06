@@ -1,0 +1,122 @@
+# =================================================================================
+# Kubeadm 초기화 전 사전 검증 (Pre-flight Checks)
+# =================================================================================
+# kubeadm을 실행하기 전에 컨테이너 런타임인 containerd가 활성화되어 있는지 확인.
+---
+- name: Pre-flight check | Ensure containerd is active
+  ansible.builtin.systemd:
+    name: containerd
+    state: started
+    enabled: yes
+
+# 커널 파라미터 net.ipv4.ip_forward가 1로 설정되어 있는지 확인하고, 아니면 설정.
+- name: Pre-flight check | Ensure ip_forward is set to 1
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    reload: yes
+
+# kubeadm init을 실행하기 전에 etcd 클러스터가 정상적으로 동작하는지 확인.
+# vars: Jinja2 템플릿을 사용하여 인벤토리의 모든 컨트롤 플레인 노드로부터 etcd 엔드포인트 목록을 동적으로 생성.
+# command: 생성된 엔드포인트 목록과 인증서를 사용하여 etcd 클러스터의 상태를 확인.
+# until: 'is healthy' 메시지가 출력될 때까지 최대 15번, 10초 간격으로 재시도.
+- name: Wait for etcd cluster to be healthy before init
+  vars:
+    etcd_endpoint_list: >-
+      {%- set endpoints = [] -%}
+      {%- for host in groups['admin_control_planes'] -%}
+      {%-   set _ = endpoints.append('https://' + hostvars[host]['ansible_host'] + ':2379') -%}
+      {%- endfor -%}
+      {{ endpoints | join(',') }}
+  ansible.builtin.command: >
+    etcdctl --endpoints={{ etcd_endpoint_list }}
+    --cacert={{ etcd_cert_dir }}/etcd/ca.crt
+    --cert={{ etcd_cert_dir }}/etcd/healthcheck-client.crt
+    --key={{ etcd_cert_dir }}/etcd/healthcheck-client.key
+    endpoint health --cluster
+  register: etcd_health_status
+  until: etcd_health_status.stdout is defined and 'is healthy' in etcd_health_status.stdout
+  retries: 15
+  delay: 10
+  changed_when: false
+
+# =================================================================================
+# Kubeadm 컨트롤 플레인 초기화 (Initialize Control Plane)
+# =================================================================================
+# Jinja2 템플릿을 사용하여 kubeadm 설정 파일(kubeadm-config.yaml)을 생성.
+# 이 파일에는 클러스터 이름, 쿠버네티스 버전, CNI 정보, 외부 etcd 엔드포인트 등 클러스터 구성에 필요한 모든 정보가 포함.
+- name: Render kubeadm config from template
+  ansible.builtin.template:
+    src: kubeadm-config.yaml.j2
+    dest: "{{ kubeadm_conf_path }}"
+
+# kubeadm init 명령을 실행하여 쿠버네티스 컨트롤 플레인을 초기화(부트스트랩).
+# --config: 위에서 생성한 설정 파일을 사용.
+- name: Initialize kubeadm control-plane
+  ansible.builtin.command:
+    cmd: "kubeadm init --config {{ kubeadm_conf_path }}"
+    creates: /etc/kubernetes/admin.conf
+  register: init_out
+
+# kubectl 명령을 사용하기 위해 root 사용자의 홈 디렉토리에 .kube 디렉토리를 생성.
+- name: Create .kube directory for root user
+  ansible.builtin.file:
+    path: /root/.kube
+    state: directory
+    mode: '0750'
+
+# 클러스터 관리자용 인증서 파일(admin.conf)을 root 사용자의 .kube 디렉토리로 복사.
+- name: Copy admin.conf to user's kube config
+  ansible.builtin.copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /root/.kube/config
+    remote_src: yes
+    owner: root
+    group: root
+    mode: '0600'
+
+# =================================================================================
+# 클러스터 참여 정보 수집 (Gather Join Information)
+# =================================================================================
+# 다른 워커 노드나 컨트롤 플레인 노드가 클러스터에 참여할 때 사용할 새로운 토큰을 생성.
+- name: Create a new token for joining nodes
+  ansible.builtin.command: kubeadm token create
+  register: join_token_raw
+  changed_when: false
+
+# 새로 참여하는 노드가 마스터 노드를 신뢰할 수 있도록, 클러스터 CA 인증서의 공개 키에 대한 해시 값을 계산.
+- name: Calculate discovery token CA cert hash
+  ansible.builtin.shell:
+    cmd: "openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'"
+  register: discovery_hash_raw
+  changed_when: false
+
+# 다른 컨트롤 플레인 노드에 복제해야 할 필수 PKI(Public Key Infrastructure) 파일들의 내용을 읽어 메모리에 저장.
+# slurp 모듈은 원격지 파일의 내용을 base64로 인코딩하여 가져옴.
+- name: Read required PKI file contents from the first master
+  ansible.builtin.slurp:
+    src: "/etc/kubernetes/pki/{{ item }}"
+  register: slurped_pki_files
+  loop:
+    - ca.crt
+    - ca.key
+    - sa.key
+    - sa.pub
+    - front-proxy-ca.crt
+    - front-proxy-ca.key
+  loop_control:
+    label: "{{ item }}"
+
+# 수집한 참여 토큰, 해시 값, PKI 파일 내용을 Ansible 컨트롤러의 메모리(in-memory inventory)에 저장.
+# add_host: 'k8s_join_info'라는 임시 호스트를 생성하여, 플레이북 내의 다른 모든 호스트들이 이 변수들을 참조할 수 있게 함.
+- name: Add join information and certificate content to in-memory inventory
+  delegate_to: localhost
+  run_once: true
+  ansible.builtin.add_host:
+    name: k8s_join_info
+    groups: just_for_vars
+    kubeadm_token: "{{ join_token_raw.stdout | trim }}"
+    discovery_token_ca_cert_hash: "{{ discovery_hash_raw.stdout | trim }}"
+    pki_files: "{{ slurped_pki_files.results | items2dict(key_name='item', value_name='content') }}"
+

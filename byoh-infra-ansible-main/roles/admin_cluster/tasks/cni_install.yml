@@ -1,0 +1,54 @@
+# =================================================================================
+# Kube-OVN CNI 설치 및 검증
+# =================================================================================
+# Kube-OVN이 마스터 노드를 식별할 수 있도록 컨트롤 플레인 역할을 가진 노드에 레이블을 추가.
+# failed_when: 레이블이 이미 존재한다는 오류는 무시하고, 다른 오류 발생 시에만 실패로 처리.
+---
+- name: Label control-plane nodes for Kube-OVN
+  ansible.builtin.shell:
+    cmd: kubectl label node -lnode-role.kubernetes.io/control-plane kube-ovn/role=master --overwrite
+  register: label_result
+  changed_when: "'labeled' in label_result.stdout"
+  failed_when: label_result.rc != 0 and 'already has a value' not in label_result.stderr
+
+# Jinja2 템플릿(kube-ovn.yaml.j2)을 사용하여 Kube-OVN 설치에 필요한 매니페스트 파일을 생성.
+- name: Create Kube-OVN manifest from template
+  ansible.builtin.template:
+    src: kube-ovn.yaml.j2
+    dest: /tmp/kube-ovn.yaml
+    mode: '0644'
+
+# 위에서 생성한 Kube-OVN 매니페스트를 클러스터에 적용하여 관련 리소스(Deployment, DaemonSet 등)를 생성.
+# changed_when: true - 이 작업은 항상 변경된 것으로 간주하여 실행 결과를 명확히 함.
+- name: Apply Kube-OVN CNI manifest
+  ansible.builtin.shell:
+    cmd: kubectl apply -f /tmp/kube-ovn.yaml
+  changed_when: true
+
+# Kube-OVN의 핵심 컴포넌트인 kube-ovn-controller가 완전히 실행될 때까지 대기.
+# availableReplicas 수가 0보다 커질 때까지 최대 30번, 10초 간격으로 재시도.
+- name: Wait for Kube-OVN controller to be ready
+  ansible.builtin.shell:
+    cmd: "kubectl get deployment kube-ovn-controller -n kube-system -o jsonpath='{.status.availableReplicas}'"
+  register: ovn_controller_replicas
+  until: ovn_controller_replicas.stdout | default('0') | int > 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+# 각 노드에서 네트워크를 담당하는 ovs-ovn 데몬셋이 모든 노드에 성공적으로 배포 완료될 때까지 대기.
+# --timeout=5m: 최대 5분까지 대기.
+- name: Wait for Kube-OVN daemons (ovs-ovn) to be ready on all nodes
+  ansible.builtin.command:
+    cmd: kubectl rollout status daemonset/ovs-ovn -n kube-system --timeout=5m
+  changed_when: false
+
+# CNI 설치 후 재시작될 수 있는 CoreDNS 파드들이 모두 'Running' 상태가 될 때까지 대기.
+- name: Wait for CoreDNS pods to be running
+  ansible.builtin.shell:
+    cmd: "[ $(kubectl get pods -n kube-system -l k8s-app=kube-dns -o jsonpath='{.items[*].status.phase}' | tr ' ' '\\n' | grep -v Running | wc -l) -eq 0 ]"
+  register: coredns_status
+  until: coredns_status.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
